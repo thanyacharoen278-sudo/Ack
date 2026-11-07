@@ -1,0 +1,617 @@
+--[[
+    Deku Hub | Raid Only · Stable
+    Auto Raid เกาะ 1→5 · Fast Attack · ลอย H18
+    ไม่มี Auto Farm / ไม่มีระบบเควส
+]]
+
+repeat task.wait() until game:IsLoaded()
+
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local VU = game:GetService("VirtualUser")
+
+local LP = Players.LocalPlayer
+if not LP then
+    LP = Players.PlayerAdded:Wait()
+end
+repeat task.wait() until LP
+
+-------------------------------------------------
+-- SETTINGS
+-------------------------------------------------
+local FLOAT_HEIGHT = 18
+local FAST_DELAY = 0.06
+local FA_DISTANCE = 150
+local TWEEN_SPEED = 120
+local FLOAT_TWEEN_TIME = 0.22
+local RAID_ISLAND_RANGE = 3500
+local RAID_NO_MOB_WAIT = 1.3
+local ARRIVE_DIST = 55
+local HITBOX = 100
+
+_G.AutoRaid = false
+_G.AutoHaki = true
+_G.AutoEquip = true
+_G.FastAttack = true
+
+local ChooseWeapon = "Melee"
+local SelectWeapon = "Combat"
+local AC = nil
+local floatTween = nil
+local moveTween = nil
+local raidIslandIndex = 1
+local raidNoMobTimer = 0
+local raidArrived = false
+
+local RaidIslands = {
+    CFrame.new(79263.203125, 21.930282592773438, -25421.021484375),
+    CFrame.new(79420.2578125, 4.920953750610352, -24189.666015625),
+    CFrame.new(79504.4296875, 8.247620582580566, -22954.46875),
+    CFrame.new(79498.6875, 25.516376495361328, -21609.3671875),
+    CFrame.new(79605.9375, 11.768150329589844, -19639.177734375),
+}
+
+-------------------------------------------------
+-- HELPERS
+-------------------------------------------------
+local function Char()
+    return LP.Character
+end
+
+local function Hum()
+    local c = Char()
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function HRP()
+    local c = Char()
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local function CancelTween(t)
+    pcall(function()
+        if t then t:Cancel() end
+    end)
+end
+
+local function ZeroVel()
+    pcall(function()
+        local h = HRP()
+        if h then
+            h.AssemblyLinearVelocity = Vector3.zero
+            h.AssemblyAngularVelocity = Vector3.zero
+        end
+    end)
+end
+
+local function RestorePlayer()
+    pcall(function()
+        CancelTween(floatTween)
+        CancelTween(moveTween)
+        floatTween, moveTween = nil, nil
+        local h = HRP()
+        local hum = Hum()
+        if h then
+            ZeroVel()
+            for _, x in ipairs(h:GetChildren()) do
+                if x:IsA("BodyVelocity") or x:IsA("BodyGyro") or x:IsA("BodyPosition") then
+                    x:Destroy()
+                end
+            end
+            h.CanCollide = true
+        end
+        if hum then
+            hum.WalkSpeed = 16
+            hum.JumpPower = 50
+            hum.PlatformStand = false
+            hum.AutoRotate = true
+        end
+        local c = Char()
+        if c then
+            for _, p in ipairs(c:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.CanCollide = true
+                end
+            end
+        end
+    end)
+end
+
+local function NoCollide()
+    pcall(function()
+        local c = Char()
+        if not c then return end
+        for _, p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") then
+                p.CanCollide = false
+            end
+        end
+    end)
+end
+
+local function RefreshWeapon()
+    pcall(function()
+        local bag = LP:FindFirstChild("Backpack")
+        local char = Char()
+        local function scan(folder)
+            if not folder then return false end
+            for _, t in ipairs(folder:GetChildren()) do
+                if t:IsA("Tool") then
+                    local tip = tostring(t.ToolTip or "")
+                    if ChooseWeapon == "Melee" and (tip == "Melee" or t.Name == "Combat") then
+                        SelectWeapon = t.Name
+                        return true
+                    elseif ChooseWeapon == "Sword" and tip == "Sword" then
+                        SelectWeapon = t.Name
+                        return true
+                    elseif ChooseWeapon == "Blox Fruit" and tip == "Blox Fruit" then
+                        SelectWeapon = t.Name
+                        return true
+                    end
+                end
+            end
+            return false
+        end
+        if char and scan(char) then return end
+        scan(bag)
+    end)
+end
+
+local function EquipTool()
+    pcall(function()
+        local char = Char()
+        local hum = Hum()
+        if not char or not hum then return end
+        if char:FindFirstChildOfClass("Tool") then return end
+        local bag = LP:FindFirstChild("Backpack")
+        if not bag then return end
+        local tool = bag:FindFirstChild(SelectWeapon)
+        if tool then
+            hum:EquipTool(tool)
+            return
+        end
+        for _, t in ipairs(bag:GetChildren()) do
+            if t:IsA("Tool") then
+                hum:EquipTool(t)
+                return
+            end
+        end
+    end)
+end
+
+local function EnableHaki()
+    if not _G.AutoHaki then return end
+    pcall(function()
+        local c = Char()
+        if c and not c:FindFirstChild("HasBuso") then
+            RS.Remotes.CommF_:InvokeServer("Buso")
+        end
+    end)
+end
+
+local function LoadCombat()
+    pcall(function()
+        local ps = LP:FindFirstChild("PlayerScripts")
+        if not ps then return end
+        local cf = ps:FindFirstChild("CombatFramework")
+        if not cf then return end
+        local mod = require(cf)
+        AC = mod
+        if typeof(mod) == "function" and debug and debug.getupvalues then
+            local ok, ups = pcall(debug.getupvalues, mod)
+            if ok and ups and ups[2] then
+                AC = ups[2]
+            end
+        end
+    end)
+end
+
+local function ExpandHitbox(mob)
+    pcall(function()
+        local root = mob and mob:FindFirstChild("HumanoidRootPart")
+        if root then
+            root.Size = Vector3.new(40, 40, 40)
+            root.Transparency = 1
+            root.CanCollide = false
+        end
+        local hum = mob and mob:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.WalkSpeed = 0
+            hum.JumpPower = 0
+        end
+    end)
+end
+
+local function TweenTo(cf)
+    local h = HRP()
+    if not h or typeof(cf) ~= "CFrame" then return end
+    CancelTween(moveTween)
+    local dist = (h.Position - cf.Position).Magnitude
+    if dist <= 3 then
+        h.CFrame = cf
+        ZeroVel()
+        return
+    end
+    local t = math.clamp(dist / TWEEN_SPEED, 0.15, 6)
+    moveTween = TweenService:Create(h, TweenInfo.new(t, Enum.EasingStyle.Linear), { CFrame = cf })
+    moveTween:Play()
+end
+
+local function FloatOn(mob)
+    local h = HRP()
+    local eh = mob and mob:FindFirstChild("HumanoidRootPart")
+    if not h or not eh then return end
+    CancelTween(floatTween)
+    local goal = eh.CFrame * CFrame.new(0, FLOAT_HEIGHT, 0)
+    local look = CFrame.lookAt(goal.Position, eh.Position)
+    local dist = (h.Position - look.Position).Magnitude
+    if dist <= 2.5 then
+        h.CFrame = look
+        ZeroVel()
+        return
+    end
+    floatTween = TweenService:Create(
+        h,
+        TweenInfo.new(FLOAT_TWEEN_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+        { CFrame = look }
+    )
+    floatTween:Play()
+    ZeroVel()
+end
+
+-------------------------------------------------
+-- FAST ATTACK
+-------------------------------------------------
+local RegisterAttack, RegisterHit
+local FA_Ready = false
+
+local function InitFastAttack()
+    pcall(function()
+        local Modules = RS:FindFirstChild("Modules")
+        if not Modules then return end
+        local Net = Modules:FindFirstChild("Net")
+        if not Net then return end
+        RegisterAttack = Net:FindFirstChild("RE/RegisterAttack") or Net["RE/RegisterAttack"]
+        RegisterHit = Net:FindFirstChild("RE/RegisterHit") or Net["RE/RegisterHit"]
+        FA_Ready = (RegisterAttack ~= nil and RegisterHit ~= nil)
+    end)
+end
+
+local function FastAttackHit()
+    if not _G.FastAttack or not FA_Ready then return end
+    pcall(function()
+        local me = HRP()
+        local myChar = Char()
+        local folder = workspace:FindFirstChild("Enemies")
+        if not me or not folder then return end
+        local others = {}
+        local base = nil
+        for _, enemy in ipairs(folder:GetChildren()) do
+            if enemy ~= myChar then
+                local head = enemy:FindFirstChild("Head")
+                    or enemy:FindFirstChild("UpperTorso")
+                    or enemy:FindFirstChild("HumanoidRootPart")
+                local hum = enemy:FindFirstChildOfClass("Humanoid")
+                if head and hum and hum.Health > 0 then
+                    local d = (me.Position - head.Position).Magnitude
+                    if d < FA_DISTANCE then
+                        table.insert(others, { enemy, head })
+                        base = base or head
+                    end
+                end
+            end
+        end
+        if #others > 0 and base then
+            RegisterAttack:FireServer(1e-9)
+            RegisterHit:FireServer(base, others)
+        end
+    end)
+end
+
+local function AttackNoCoolDown()
+    pcall(function()
+        if not AC then LoadCombat() end
+        local ctrl = AC
+        if ctrl and ctrl.activeController then
+            ctrl = ctrl.activeController
+        end
+        if ctrl then
+            ctrl.timeToNextAttack = 0
+            ctrl.attacking = false
+            ctrl.blocking = false
+            ctrl.hitboxMagnitude = HITBOX
+            if type(ctrl.attack) == "function" then
+                ctrl:attack()
+            end
+        end
+    end)
+    pcall(function()
+        local tool = Char() and Char():FindFirstChildOfClass("Tool")
+        if tool then tool:Activate() end
+    end)
+    FastAttackHit()
+end
+
+-------------------------------------------------
+-- RAID LOGIC
+-------------------------------------------------
+local function FindRaidMobNear(cf)
+    local best, bestD = nil, RAID_ISLAND_RANGE
+    local folder = workspace:FindFirstChild("Enemies")
+    if not folder then return nil end
+    for _, e in ipairs(folder:GetChildren()) do
+        local hum = e:FindFirstChildOfClass("Humanoid")
+        local root = e:FindFirstChild("HumanoidRootPart")
+        if hum and root and hum.Health > 0 then
+            local d = (root.Position - cf.Position).Magnitude
+            if d < bestD then
+                bestD = d
+                best = e
+            end
+        end
+    end
+    return best
+end
+
+local function GoNextRaidIsland()
+    raidIslandIndex = raidIslandIndex + 1
+    raidArrived = false
+    raidNoMobTimer = 0
+    if raidIslandIndex > #RaidIslands then
+        raidIslandIndex = 1
+        _G.AutoRaid = false
+        RestorePlayer()
+        print("[Deku Raid] ครบเกาะ 5 · ปิด Auto Raid")
+    else
+        print("[Deku Raid] ไปเกาะ", raidIslandIndex)
+    end
+end
+
+-------------------------------------------------
+-- UI (ง่าย · ไม่พึ่ง DiscordLib ถ้าโหลดไม่ได้)
+-------------------------------------------------
+local function BuildUI()
+    local UIS = game:GetService("UserInputService")
+    local parent = LP:WaitForChild("PlayerGui", 10)
+    if not parent then return end
+    pcall(function()
+        if gethui then parent = gethui() end
+    end)
+
+    local old = parent:FindFirstChild("DekuRaidUI")
+    if old then old:Destroy() end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "DekuRaidUI"
+    gui.ResetOnSpawn = false
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.Parent = parent
+
+    local logo = Instance.new("TextButton")
+    logo.Size = UDim2.fromOffset(44, 44)
+    logo.Position = UDim2.new(0, 12, 0.4, 0)
+    logo.BackgroundColor3 = Color3.fromRGB(22, 28, 42)
+    logo.Text = "R"
+    logo.Font = Enum.Font.GothamBold
+    logo.TextSize = 18
+    logo.TextColor3 = Color3.fromRGB(100, 180, 255)
+    logo.Parent = gui
+    Instance.new("UICorner", logo).CornerRadius = UDim.new(1, 0)
+
+    local panel = Instance.new("Frame")
+    panel.Size = UDim2.fromOffset(200, 210)
+    panel.Position = UDim2.new(0, 12, 0.4, 52)
+    panel.BackgroundColor3 = Color3.fromRGB(16, 20, 32)
+    panel.BorderSizePixel = 0
+    panel.Parent = gui
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 10)
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -12, 0, 26)
+    title.Position = UDim2.fromOffset(8, 4)
+    title.BackgroundTransparency = 1
+    title.Text = "Deku Raid"
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 14
+    title.TextColor3 = Color3.fromRGB(120, 190, 255)
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = panel
+
+    local status = Instance.new("TextLabel")
+    status.Size = UDim2.new(1, -16, 0, 18)
+    status.Position = UDim2.fromOffset(8, 180)
+    status.BackgroundTransparency = 1
+    status.Text = "สถานะ: ปิด · เข้าเรดก่อน"
+    status.Font = Enum.Font.Gotham
+    status.TextSize = 11
+    status.TextColor3 = Color3.fromRGB(150, 160, 180)
+    status.TextXAlignment = Enum.TextXAlignment.Left
+    status.Parent = panel
+
+    local function btn(y, text, color, cb)
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.new(1, -16, 0, 30)
+        b.Position = UDim2.fromOffset(8, y)
+        b.BackgroundColor3 = color
+        b.Text = text
+        b.Font = Enum.Font.GothamBold
+        b.TextSize = 12
+        b.TextColor3 = Color3.new(1, 1, 1)
+        b.Parent = panel
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+        b.MouseButton1Click:Connect(cb)
+        return b
+    end
+
+    local raidBtn = btn(36, "Auto Raid: OFF", Color3.fromRGB(40, 48, 64), function() end)
+    raidBtn.MouseButton1Click:Connect(function()
+        _G.AutoRaid = not _G.AutoRaid
+        if _G.AutoRaid then
+            raidIslandIndex = 1
+            raidArrived = false
+            raidNoMobTimer = 0
+            raidBtn.Text = "Auto Raid: ON"
+            raidBtn.BackgroundColor3 = Color3.fromRGB(30, 100, 50)
+            status.Text = "สถานะ: เกาะ " .. tostring(raidIslandIndex)
+        else
+            raidBtn.Text = "Auto Raid: OFF"
+            raidBtn.BackgroundColor3 = Color3.fromRGB(40, 48, 64)
+            status.Text = "สถานะ: ปิด"
+            RestorePlayer()
+        end
+    end)
+
+    btn(72, "Reset Island = 1", Color3.fromRGB(50, 60, 90), function()
+        raidIslandIndex = 1
+        raidArrived = false
+        raidNoMobTimer = 0
+        status.Text = "รีเซ็ตเกาะ 1"
+    end)
+
+    btn(108, "Stop + Restore", Color3.fromRGB(90, 40, 40), function()
+        _G.AutoRaid = false
+        raidBtn.Text = "Auto Raid: OFF"
+        raidBtn.BackgroundColor3 = Color3.fromRGB(40, 48, 64)
+        RestorePlayer()
+        status.Text = "หยุด + คืนค่า"
+    end)
+
+    local wep = btn(144, "Weapon: Melee", Color3.fromRGB(40, 55, 80), function() end)
+    local order = { "Melee", "Sword", "Blox Fruit" }
+    local wi = 1
+    wep.MouseButton1Click:Connect(function()
+        wi = wi % #order + 1
+        ChooseWeapon = order[wi]
+        wep.Text = "Weapon: " .. ChooseWeapon
+        RefreshWeapon()
+    end)
+
+    -- เปิด/ปิดแผง
+    local open = true
+    logo.MouseButton1Click:Connect(function()
+        open = not open
+        panel.Visible = open
+    end)
+
+    -- ลากโลโก้
+    local drag, d0, p0 = false, nil, nil
+    logo.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            drag = true
+            d0 = input.Position
+            p0 = logo.Position
+        end
+    end)
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            drag = false
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if not drag then return end
+        if input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch then
+            local d = input.Position - d0
+            logo.Position = UDim2.new(p0.X.Scale, p0.X.Offset + d.X, p0.Y.Scale, p0.Y.Offset + d.Y)
+            panel.Position = UDim2.new(0, logo.Position.X.Offset, 0, logo.Position.Y.Offset + 52)
+        end
+    end)
+
+    -- อัปเดตสถานะ
+    task.spawn(function()
+        while gui.Parent do
+            if _G.AutoRaid then
+                status.Text = "สถานะ: เกาะ " .. tostring(raidIslandIndex) .. "/5"
+            end
+            task.wait(0.5)
+        end
+    end)
+end
+
+-------------------------------------------------
+-- RAID LOOP
+-------------------------------------------------
+task.spawn(function()
+    while true do
+        if not _G.AutoRaid then
+            task.wait(0.3)
+        else
+            pcall(function()
+                local islandCF = RaidIslands[raidIslandIndex]
+                if not islandCF then return end
+                local h = HRP()
+                if not h then return end
+
+                if _G.AutoEquip then
+                    RefreshWeapon()
+                    EquipTool()
+                end
+                EnableHaki()
+
+                local toIsland = (h.Position - islandCF.Position).Magnitude
+                if not raidArrived then
+                    if toIsland > ARRIVE_DIST then
+                        TweenTo(islandCF * CFrame.new(0, 8, 0))
+                        return
+                    end
+                    raidArrived = true
+                    raidNoMobTimer = 0
+                end
+
+                local mob = FindRaidMobNear(islandCF)
+                if mob then
+                    raidNoMobTimer = 0
+                    ExpandHitbox(mob)
+                    FloatOn(mob)
+                    AttackNoCoolDown()
+                else
+                    raidNoMobTimer = raidNoMobTimer + math.max(FAST_DELAY, 0.1)
+                    ZeroVel()
+                    if (h.Position - islandCF.Position).Magnitude > 12 then
+                        TweenTo(islandCF * CFrame.new(0, 8, 0))
+                    end
+                    if raidNoMobTimer >= RAID_NO_MOB_WAIT then
+                        GoNextRaidIsland()
+                    end
+                end
+            end)
+            task.wait(FAST_DELAY)
+        end
+    end
+end)
+
+RunService.Stepped:Connect(function()
+    if not _G.AutoRaid then return end
+    NoCollide()
+    ZeroVel()
+end)
+
+LP.CharacterAdded:Connect(function()
+    task.wait(0.7)
+    AC = nil
+    CancelTween(floatTween)
+    CancelTween(moveTween)
+    raidArrived = false
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(60)
+        pcall(function()
+            VU:CaptureController()
+            VU:ClickButton2(Vector2.new())
+        end)
+    end
+end)
+
+-- เริ่มต้น
+pcall(LoadCombat)
+pcall(InitFastAttack)
+pcall(RefreshWeapon)
+pcall(BuildUI)
+
+print("[Deku Raid] Ready · เข้าเรดก่อน → กด Auto Raid")
